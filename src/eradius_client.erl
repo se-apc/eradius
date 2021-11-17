@@ -26,6 +26,11 @@
 -include("eradius_dict.hrl").
 -include("eradius_lib.hrl").
 
+% Needed for PPI removals
+-define(PPI_USERNAME_ID, 1).
+-define(PPI_GENERIC_USERNAME, 'RADIUS_USER').
+
+
 -define(SERVER, ?MODULE).
 -define(DEFAULT_RETRIES, 3).
 -define(DEFAULT_TIMEOUT, 5000).
@@ -153,19 +158,19 @@ proceed_response(Request, {ok, Response, Secret, Authenticator}, _Peer = {_Serve
     case eradius_lib:decode_request(Response, Secret, Authenticator) of
         {bad_pdu, "Message-Authenticator Attribute is invalid" = Reason} ->
             update_client_response(bad_authenticator, MetricsInfo, Request),
-            ?LOG(error, "~s INF: Noreply for request ~p. Could not decode the request, reason: ~s", [printable_peer(ServerIP, Port), Request, Reason]),
+            ?LOG(error, "~s INF: Noreply for request ~p. Could not decode the request, reason: ~s", [printable_peer(ServerIP, Port), remove_ppi(Request), Reason]),
             noreply;
         {bad_pdu, "Authenticator Attribute is invalid" = Reason} ->
             update_client_response(bad_authenticator, MetricsInfo, Request),
-            ?LOG(error, "~s INF: Noreply for request ~p. Could not decode the request, reason: ~s", [printable_peer(ServerIP, Port), Request, Reason]),
+            ?LOG(error, "~s INF: Noreply for request ~p. Could not decode the request, reason: ~s", [printable_peer(ServerIP, Port), remove_ppi(Request), Reason]),
             noreply;
         {bad_pdu, "unknown request type" = Reason} ->
             update_client_response(unknown_req_type, MetricsInfo, Request),
-            ?LOG(error, "~s INF: Noreply for request ~p. Could not decode the request, reason: ~s", [printable_peer(ServerIP, Port), Request, Reason]),
+            ?LOG(error, "~s INF: Noreply for request ~p. Could not decode the request, reason: ~s", [printable_peer(ServerIP, Port), remove_ppi(Request), Reason]),
             noreply;
         {bad_pdu, Reason} ->
             update_client_response(dropped, MetricsInfo, Request),
-            ?LOG(error, "~s INF: Noreply for request ~p. Could not decode the request, reason: ~s", [printable_peer(ServerIP, Port), Request, Reason]),
+            ?LOG(error, "~s INF: Noreply for request ~p. Could not decode the request, reason: ~s", [printable_peer(ServerIP, Port), remove_ppi(Request), Reason]),
             maybe_failover(Request, noreply, {ServerIP, Port}, Options);
         Decoded ->
             update_client_response(Decoded#radius_request.cmd, MetricsInfo, Request),
@@ -176,6 +181,11 @@ proceed_response(Request, Response, {_ServerName, {ServerIP, Port}}, TS1, Metric
     update_client_responses(MetricsInfo),
     update_client_request(Request#radius_request.cmd, MetricsInfo, eradius_lib:timestamp(milli_seconds) - TS1, Request),
     maybe_failover(Request, Response, {ServerIP, Port}, Options).
+
+% remove PPI from the request
+remove_ppi(Request) ->
+   Request1 = eradius_lib:del_attr(Request, ?PPI_USERNAME_ID),
+   eradius_lib:set_attr(Request1, ?PPI_USERNAME_ID, ?PPI_GENERIC_USERNAME).
 
 maybe_failover(Request, Response, {ServerIP, Port}, Options) ->
     case proplists:get_value(failover, Options, []) of
