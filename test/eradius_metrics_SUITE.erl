@@ -24,24 +24,31 @@
 -include_lib("eradius/include/eradius_lib.hrl").
 -include_lib("eradius/include/eradius_dict.hrl").
 -include_lib("eradius/include/dictionary.hrl").
+-include("eradius_test.hrl").
 
 -define(SECRET, <<"secret">>).
 -define(ATTRS_GOOD, [{?NAS_Identifier, "good"}, {?RStatus_Type, ?RStatus_Type_Start}]).
 -define(ATTRS_BAD, [{?NAS_Identifier, "bad"}]).
 -define(ATTRS_ERROR, [{?NAS_Identifier, "error"}]).
+-define(ATTRS_AS_RECORD, [{#attribute{id = ?RStatus_Type}, ?RStatus_Type_Start}]).
 -define(LOCALHOST, eradius_test_handler:localhost(atom)).
 
 %% test callbacks
-all() -> [good_requests, bad_requests, error_requests].
+all() -> [good_requests, bad_requests, error_requests, request_with_attrs_as_record].
 
 init_per_suite(Config) ->
     application:load(eradius),
     EradiusConfig = [{radius_callback, ?MODULE},
                      {servers, [{good,  {eradius_test_handler:localhost(ip), [1812]}},  %% for 'positive' responses, e.g. access accepts
-                                {bad,  {eradius_test_handler:localhost(ip), [1813]}},   %% for 'negative' responses, e.g. coa naks
-                                {error,  {eradius_test_handler:localhost(ip), [1814]}}  %% here things go wrong, e.g. duplicate requests
+                                {bad,   {eradius_test_handler:localhost(ip), [1813]}},  %% for 'negative' responses, e.g. coa naks
+                                {error, {eradius_test_handler:localhost(ip), [1814]}}   %% here things go wrong, e.g. duplicate requests
                                ]},
                      {session_nodes, [node()]},
+                     {servers_pool,
+                      [{test_pool, [{eradius_test_handler:localhost(tuple), 1814, ?SECRET},
+                                    {eradius_test_handler:localhost(tuple), 1813, ?SECRET},
+                                    {eradius_test_handler:localhost(tuple), 1812, ?SECRET}]}]
+                     },
                      {good, [
                              { {"good", [] }, [{"127.0.0.2", ?SECRET, [{nas_id, <<"good_nas">>}]}] }
                             ]},
@@ -54,10 +61,14 @@ init_per_suite(Config) ->
                      {tables, [dictionary]},
                      {client_ip, {127,0,0,2}},
                      {client_ports, 20},
-                     {counter_aggregator, false}
+                     {counter_aggregator, false},
+                     {server_status_metrics_enabled, true}
                     ],
     [application:set_env(eradius, Key, Value) || {Key, Value} <- EradiusConfig],
     application:set_env(prometheus, collectors, [eradius_prometheus_collector]),
+    % prometheus is not included directly to eradius but prometheus_eradius_collector
+    % should include it
+    application:ensure_all_started(prometheus),
     {ok, _} = application:ensure_all_started(eradius),
     spawn(fun() ->
                   eradius:modules_ready([?MODULE]),
@@ -67,8 +78,12 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) ->
     application:stop(eradius),
+    application:stop(prometheus),
     ok.
 
+init_per_testcase(_, Config) ->
+    eradius_client:init_server_status_metrics(),
+    Config.
 
 %% tests
 good_requests(_Config) ->
@@ -91,6 +106,10 @@ bad_requests(_Config) ->
 error_requests(_Config) ->
     check_single_request(error, request, access, access_accept).
 
+request_with_attrs_as_record(_Config) ->
+    ok = send_request(accreq, eradius_test_handler:localhost(tuple), 1812, ?ATTRS_AS_RECORD, [{server_name, good}, {client_name, test_records}]),
+    ok = check_metric(accreq, client_accounting_requests_total, [{server_name, good}, {client_name, test_records}, {acct_type, start}], 1).
+
 %% helpers
 check_single_request(good, EradiusRequestType, _RequestType, _ResponseType) ->
     ok = send_request(EradiusRequestType, eradius_test_handler:localhost(tuple), 1812, ?ATTRS_GOOD, [{server_name, good}, {client_name, test}]),
@@ -102,23 +121,31 @@ check_single_request(good, EradiusRequestType, _RequestType, _ResponseType) ->
     ok = check_metric(EradiusRequestType, client_accounting_requests_total, [{server_name, good}, {acct_type, update}], 0),
     ok = check_metric(client_accept_responses_total, [{server_name, good}], 1),
     ok = check_metric(accept_responses_total, [{server_name, good}], 1),
-    ok = check_metric(access_requests_total, [{server_name, good}], 1);
+    ok = check_metric(access_requests_total, [{server_name, good}], 1),
+    ok = check_metric(server_status, true, [eradius_test_handler:localhost(tuple), 1812]);
 check_single_request(bad, EradiusRequestType, _RequestType, _ResponseType) ->
     ok = send_request(EradiusRequestType, eradius_test_handler:localhost(tuple), 1813, ?ATTRS_BAD, [{server_name, bad}, {client_name, test}]),
     ok = check_metric(client_access_requests_total, [{server_name, bad}], 1),
     ok = check_metric(client_reject_responses_total, [{server_name, bad}], 1),
     ok = check_metric(access_requests_total, [{server_name, bad}], 1),
-    ok = check_metric(reject_responses_total, [{server_name, bad}], 1);
+    ok = check_metric(reject_responses_total, [{server_name, bad}], 1),
+    ok = check_metric(server_status, true, [eradius_test_handler:localhost(tuple), 1813]);
 check_single_request(error, EradiusRequestType, _RequestType, _ResponseType) ->
     ok = send_request(EradiusRequestType, eradius_test_handler:localhost(tuple), 1814, ?ATTRS_ERROR,
-                      [{server_name, error}, {client_name, test}, {timeout, 1000}]),
+                      [{server_name, error}, {client_name, test}, {timeout, 1000},
+                       {failover, [{eradius_test_handler:localhost(tuple), 1812, ?SECRET}]}]),
     ok = check_metric(client_access_requests_total, [{server_name, error}], 1),
     ok = check_metric(client_retransmissions_total, [{server_name, error}], 1),
     ok = check_metric(access_requests_total, [{server_name, error}], 1),
     ok = check_metric(accept_responses_total, [{server_name, error}], 1),
     ok = check_metric(duplicated_requests_total, [{server_name, error}], 1),
     ok = check_metric(client_requests_total, [{server_name, error}], 1),
-    ok = check_metric(requests_total, [{server_name, error}], 2).
+    ok = check_metric(requests_total, [{server_name, error}], 2),
+    ok = check_metric(server_status, false, [eradius_test_handler:localhost(tuple), 1812]),
+    ok = check_metric(server_status, false, [eradius_test_handler:localhost(tuple), 1813]),
+    ok = check_metric(server_status, true, [eradius_test_handler:localhost(tuple), 1814]),
+    ok = check_metric(server_status, undefined, [eradius_test_handler:localhost(tuple), 1815]).
+
 
 check_total_requests(good, N) ->
     ok = check_metric(requests_total, [{server_name, good}], N),
@@ -149,6 +176,9 @@ check_metric(accreq, Id, Labels, Count) ->
 check_metric(_, _, _, _) ->
     ok.
 
+check_metric(server_status, Value, Labels) ->
+    ?equal(Value, prometheus_boolean:value(server_status, Labels)),
+    ok;
 check_metric(Id, Labels, Count) ->
     case eradius_prometheus_collector:fetch_counter(Id, Labels) of
         [{Count, _}] ->
@@ -188,7 +218,7 @@ radius_request(#radius_request{cmd = coareq}, #nas_prop{nas_id = <<"bad_nas">>},
 radius_request(#radius_request{cmd = discreq}, #nas_prop{nas_id = <<"bad_nas">>}, _) ->
     {reply, #radius_request{cmd = discnak}};
 
-%% RADIUS NAS callbacks for 'bad' requests
+%% RADIUS NAS callbacks for 'error' requests
 radius_request(#radius_request{cmd = request}, #nas_prop{nas_id = <<"error_nas">>}, _) ->
     timer:sleep(1500), %% this will by default trigger one resend
     {reply, #radius_request{cmd = accept}}.

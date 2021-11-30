@@ -3,7 +3,8 @@
 -export([validate_new_config/0, validate_new_config/2, validate_config/1]).
 % Config validating API functions:
 -export([get_app_env/2, validate_ip/1, validate_port/1, validate_ports/1,
-         map_helper/3, map_helper/2, ok_error_helper/2, validate_secret/1]).
+         map_helper/3, map_helper/2, ok_error_helper/2, validate_secret/1,
+         validate_options/1, validate_socket_options/1, validate_server/1]).
 -export([generate_ip_list/2]).
 
 %% ------------------------------------------------------------------------------------------
@@ -30,17 +31,21 @@ validate_new_config_start(Servers, Nodes) ->
     map_helper(fun(Server) -> validate_new_server_config(Server, Nodes) end, Servers, flatten).
 
 validate_new_server_config({Name, {IP, ListOfPorts}}, Nodes) ->
-    validate_new_server_config(Name, get_app_env(Name), validate_ip(IP), validate_ports(ListOfPorts), Nodes).
+    validate_new_server_config(Name, get_app_env(Name), validate_ip(IP), validate_ports(ListOfPorts), [], Nodes);
 
-validate_new_server_config(_Server, {invalid, _} = Invalid, _IP, _ListOfPorts, _Nodes) -> Invalid;
-validate_new_server_config(_Server, _NasList, {invalid, _} = Invalid, _ListOfPorts, _Nodes) -> Invalid;
-validate_new_server_config(_Server, _NasList, _IP, {invalid, _} = Invalid, _Nodes) -> Invalid;
-validate_new_server_config(Server, NasList, IP, ListOfPorts, Nodes) ->
+validate_new_server_config({Name, {IP, ListOfPorts, Opts}}, Nodes) ->
+    validate_new_server_config(Name, get_app_env(Name), validate_ip(IP), validate_ports(ListOfPorts), validate_options(Opts), Nodes).
+
+validate_new_server_config(_Server, {invalid, _} = Invalid, _IP, _ListOfPorts, _Opts, _Nodes) -> Invalid;
+validate_new_server_config(_Server, _NasList, {invalid, _} = Invalid, _ListOfPorts, _Opts, _Nodes) -> Invalid;
+validate_new_server_config(_Server, _NasList, _IP, {invalid, _} = Invalid, _Opts, _Nodes) -> Invalid;
+validate_new_server_config(_Server, _NasList, _IP, _ListOfPorts, {invalid, _} = Invalid, _Nodes) -> Invalid;
+validate_new_server_config(Server, NasList, IP, ListOfPorts, Opts, Nodes) ->
     case validate_new_nas_list(NasList, {IP, ListOfPorts, Nodes}) of
         {invalid, _} = Invalid ->
             Invalid;
         Values ->
-            lists:map(fun(Port) -> {Server, {IP, Port}, Values} end, ListOfPorts)
+            lists:map(fun(Port) -> {Server, {IP, Port, Opts}, Values} end, ListOfPorts)
     end.
 
 validate_new_nas_list(NasLists, ServerConfig) ->
@@ -65,11 +70,11 @@ validate_behavior({Module, Nas, _Args} = Value) when is_atom(Module) andalso ?is
         false -> Value
     end;
 validate_behavior({Module, _, _}) when is_atom(Module) ->
-    ?invalid("bad NAS Id in Behavior specifification: ~p", [Module]);
+    ?invalid("bad NAS Id in Behavior specification: ~p", [Module]);
 validate_behavior({Module, _, _}) ->
-    ?invalid("bad module in Behavior specifification: ~p", [Module]);
+    ?invalid("bad module in Behavior specification: ~p", [Module]);
 validate_behavior(Term) ->
-    ?invalid("bad Term in Behavior specifification: ~p", [Term]).
+    ?invalid("bad Term in Behavior specification: ~p", [Term]).
 
 validate_arguments({Module, Nas, Args} = Value) ->
     case Module:validate_arguments(Args) of
@@ -124,6 +129,32 @@ validate_port(Port) when is_list(Port) -> validate_port(catch list_to_integer(Po
 validate_port(Port) when ?pos_int(Port) -> Port;
 validate_port(Port) when is_integer(Port) -> ?invalid("port number out of range: ~p", [Port]);
 validate_port(Port) -> ?invalid("bad port number: ~p", [Port]).
+
+validate_options(Opts) when is_list(Opts) ->
+    SocketOpts = proplists:get_value(socket_opts, Opts, []),
+    case validate_socket_options(SocketOpts) of
+        {invalid, Reason} = E ->
+            io:format("validate_socket_options: ~p", [Reason]),
+            E;
+        _ ->
+            Opts
+    end;
+validate_options(Opts) ->
+    ?invalid("expect a list of options: ~p", Opts).
+
+validate_socket_options(SocketOpts) when is_list(SocketOpts) ->
+    BannedOpts = [ip, binary, list, active],
+    IsBannedFn = fun(Opt) ->
+        proplists:is_defined(Opt, SocketOpts)
+    end,
+    case lists:any(IsBannedFn, BannedOpts) of
+        true ->
+            ?invalid("bad socket options specified: ~p", [SocketOpts]);
+        false ->
+            SocketOpts
+    end;
+validate_socket_options(Opts) ->
+    ?invalid("expect a list of options: ~p", Opts).
 
 check_root([First | _] = AllNodes) when is_tuple(First) ->
     map_helper(fun({Name, List}) ->
@@ -185,11 +216,11 @@ validate_server_config([]) ->
     [];
 validate_server_config([{Server, NasList} | ConfigRest]) ->
     case validate_server(Server) of
-        E = {invalid, _} ->
+        {invalid, _} = E ->
             E;
         ValidServer ->
             case validate_nas_list(NasList) of
-                E = {invalid, _} ->
+                {invalid, _} = E ->
                     E;
                 ValidNasList ->
                     case validate_server_config(ConfigRest) of
@@ -227,6 +258,15 @@ validate_server(String) when is_list(String) ->
             validate_server({IP, Port});
         _ ->
             {invalid, io_lib:format("bad address/port combination: ~p", [String])}
+    end;
+validate_server({IP, Port, Opts}) when is_list(Opts) ->
+    case {validate_server({IP, Port}), validate_options(Opts)} of
+        {{invalid, _Reason} = E, _} ->
+            E;
+        {_, {invalid, _Reason} = E} ->
+            E;
+        {{ValidIP, ValidPort}, ValidOpts} ->
+            {ValidIP, ValidPort, ValidOpts}
     end;
 validate_server(X) ->
     {invalid, io_lib:format("bad address/port combination: ~p", [X])}.

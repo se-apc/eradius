@@ -3,6 +3,38 @@ eradius
 
 A generic RADIUS client and server.
 
+Version 2.2.4 - 9 August 2021
+---------------------------
+
+**Bugfixes** :bug:
+* [#213](https://github.com/travelping/eradius/pull/213) Fix updating of server status metric
+
+Version 2.2.3 - 29 July 2021
+---------------------------
+
+**Features** :rocket:
+* [#208](https://github.com/travelping/eradius/pull/208) Add `server_status` metric
+* [#210](https://github.com/travelping/eradius/pull/210) Make server status metrics optional
+
+**Bugfixes** :bug:
+* [#209](https://github.com/travelping/eradius/pull/209) Fix `NAS` name in metrics test commen
+
+Version 2.2.2 - 23 June 2021
+---------------------------
+
+**Features** :rocket:
+* [#203](https://github.com/travelping/eradius/pull/203) Adding `RADIUS` dictionary for `APC` by `Schneider Electric`
+
+**Bugfixes** :bug:
+* [#192](https://github.com/travelping/eradius/pull/192) Fix building of eradius with `persistent_term`
+* [#204](https://github.com/travelping/eradius/pull/204) Fix gathering of `RADIUS` `Accounting` metrics
+
+**Refactorings** :fire:
+* [#194](https://github.com/travelping/eradius/pull/194) Use `ets:update_counter` to update `RADIUS` metrics
+
+**Dependencies** :gear:
+* [#205](https://github.com/travelping/eradius/pull/205) Update [prometheus](https://github.com/deadtrickster/prometheus.erl) tag to [4.8.1](https://github.com/deadtrickster/prometheus.erl/releases/tag/v4.8.1)
+
 Version 2.2.1 - 4 February 2021
 ---------------------------
 
@@ -82,7 +114,7 @@ Version 0.9.0 - 07 Feb 2018
 
 Version 0.8.9 - 12 Dec 2017
 ---------------------------
-* Reworks dicts to maps in client and node_mon 
+* Reworks dicts to maps in client and node_mon
 * Parse $INCLUDE directive in priv/dictionaries/dictionary\* files
 * Get rid of tetrapak
 

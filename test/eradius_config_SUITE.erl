@@ -23,10 +23,12 @@
 -include("../include/eradius_lib.hrl").
 -include("eradius_test.hrl").
 
-all() -> [config_1, config_2, config_nas_removing, config_with_ranges, log_test, generate_ip_list_test].
+all() -> [config_1, config_2, config_options,
+          config_socket_options, config_nas_removing,
+          config_with_ranges, log_test, generate_ip_list_test,
+          test_validate_server].
 
 init_per_suite(Config) ->
-    % Is it a good practise? Copied fron client test
     {ok, _} = application:ensure_all_started(eradius),
     Config.
 
@@ -46,7 +48,7 @@ config_1(_Config) ->
                       { {"NAS2", [arg1, arg2]},
                           [{{10, 18, 14, 3}, <<"secret2">>, [{nas_id, <<"name">>}]}]}
                    ]}],
-    apply_conf(Conf),
+    ok = apply_conf(Conf),
     LocalHost = eradius_test_handler:localhost(tuple),
     ?match({ok, {?MODULE,[arg1,arg2]},
                 #nas_prop{
@@ -90,7 +92,7 @@ config_2(_Config) ->
                       { {handler2, "NAS2", [arg3, arg4]},
                           [ {"10.18.14.2", <<"secret2">>, [{group, "NodeGroup2"}]} ] }
                  ]}],
-    apply_conf(Conf),
+    ok = apply_conf(Conf),
     LocalHost = eradius_test_handler:localhost(tuple),
     ?match({ok, {handler1,[arg1,arg2]},
                 #nas_prop{
@@ -118,10 +120,34 @@ config_2(_Config) ->
                          }}, eradius_server_mon:lookup_handler(LocalHost, 1813, {10,18,14,2})),
     ok.
 
+config_socket_options(_Config) ->
+    Opts = [{netns, "/var/run/netns/net1"}],
+    ?match(Opts, eradius_config:validate_socket_options(Opts)),
+    Invalid = [{buffer, 512}, {active, false}],
+    ?match({invalid, _}, eradius_config:validate_socket_options(Invalid)),
+    Invalid2 = [{buffer, 512}, {ip, {127, 0, 0, 10}}],
+    ?match({invalid, _}, eradius_config:validate_socket_options(Invalid2)),
+    ok.
+
+config_options(_Config) ->
+    Opts = [{socket_opts, [{recbuf, 8192},
+                           {netns, "/var/run/netns/net1"}]}],
+    ?match(Opts, eradius_config:validate_options(Opts)),
+    ok.
+test_validate_server(_Config) ->
+    SocketOpts = [{socket_opts, [{recbuf, 8192}, {netns, "/var/run/netns/net1"}]}],
+    Opts = {{127, 0, 0, 1}, 1812, SocketOpts},
+    ?match(Opts, eradius_config:validate_server(Opts)),
+    Opts2 = {{127, 0, 0, 1}, "1812", SocketOpts},
+    ?match({{127, 0, 0, 1}, 1812, SocketOpts}, eradius_config:validate_server(Opts2)),
+    Opts3 = {{127, 0, 0, 1}, 1812},
+    ?match(Opts3, eradius_config:validate_server(Opts3)),
+    ok.
+
 config_nas_removing(_Config) ->
     Conf = [{servers, [ {root, {eradius_test_handler:localhost(ip), [1812, 1813]}} ]},
             {root, [ ]}],
-    apply_conf(Conf),
+    ok = apply_conf(Conf),
     ?match([], ets:tab2list(eradius_nas_tab)),
     ok.
 
@@ -138,7 +164,7 @@ config_with_ranges(_Config) ->
                       { {handler, "NAS", []},
                           [ {"10.18.14.2/30", <<"secret2">>, [{group, "NodeGroup"}]} ] }
                  ]}],
-    apply_conf(Conf),
+    ok = apply_conf(Conf),
     LocalHost = eradius_test_handler:localhost(tuple),
     ?match({ok, {handler,[]},
                 #nas_prop{
