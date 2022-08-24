@@ -99,9 +99,16 @@ send_request({IP, Port, Secret}, Request, Options) when ?GOOD_CMD(Request) andal
     Retries = proplists:get_value(retries, Options, ?DEFAULT_RETRIES),
     Timeout = proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT),
     Peer = {ServerName, {IP, Port}},
-    {Socket, ReqId} = gen_server:call(?SERVER, {wanna_send, Peer, MetricsInfo}),
-    Response = send_request_loop(Socket, ReqId, Peer, Request#radius_request{reqid = ReqId, secret = Secret}, Retries, Timeout, MetricsInfo),
-    proceed_response(Request, Response, Peer, TS1, MetricsInfo, Options);
+    try gen_server:call(?SERVER, {wanna_send, Peer, MetricsInfo}) of
+        {Socket, ReqId} ->
+            Response = send_request_loop(Socket, ReqId, Peer, Request#radius_request{reqid = ReqId, secret = Secret}, Retries, Timeout, MetricsInfo),
+            proceed_response(Request, Response, Peer, TS1, MetricsInfo, Options)
+    catch
+        exit:{Reason, _} ->
+            ?LOG(error, "Call to ~p failed. Reason ~p", [?SERVER, Reason]),
+            {error, Reason}
+    end;
+
 send_request({_IP, _Port, _Secret}, _Request, _Options) ->
     error(badarg).
 
